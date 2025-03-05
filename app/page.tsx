@@ -1,15 +1,24 @@
 "use client"
 
-import { TableHeader } from "@/components/ui/table"
-
-import { useState, useCallback, useEffect } from "react"
-import { Plus, Trash2, Minus, CheckCircle2, Circle, CircleDashed } from "lucide-react"
+import { useState, useCallback, useEffect, useRef } from "react"
+import {
+  Plus,
+  Minus,
+  CheckCircle2,
+  Circle,
+  CircleDashed,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  ChevronsUp,
+  ChevronsDown,
+  ClipboardList,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
+import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Table, TableBody, TableCell, TableFooter, TableHead, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter } from "@/components/ui/table"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,8 +28,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 
 interface MenuItem {
   id: string
@@ -34,6 +50,7 @@ interface Customer {
   name: string
   orders: Record<string, number>
   served: Record<string, boolean>
+  createdAt: number
 }
 
 const menuItems: MenuItem[] = [
@@ -49,19 +66,14 @@ const menuItems: MenuItem[] = [
   { id: "yanjing-u8", name: "燕京u8啤酒", price: 8, category: "drink" },
 ]
 
-const calculatePendingItems = (customers: Customer[], itemId: string) => {
-  return customers.reduce((total, customer) => {
-    const ordered = customer.orders[itemId] || 0
-    const served = customer.served[itemId] ? customer.orders[itemId] : 0
-    return total + (ordered - served)
-  }, 0)
-}
-
 export default function OrderPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
-
-  const foodItems = menuItems.filter((item) => item.category === "food")
-  const drinkItems = menuItems.filter((item) => item.category === "drink")
+  const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null)
+  const [showScrollToTop, setShowScrollToTop] = useState(false)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const [isDeleteAllDialogOpen, setIsDeleteAllDialogOpen] = useState(false)
+  const [customerToDelete, setCustomerToDelete] = useState<string | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   // Load state from localStorage on component mount
   useEffect(() => {
@@ -76,18 +88,48 @@ export default function OrderPage() {
     localStorage.setItem("customers", JSON.stringify(customers))
   }, [customers])
 
+  // Handle scroll events
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content) return
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = content
+      setShowScrollToTop(scrollTop > 100)
+      setShowScrollToBottom(scrollHeight - scrollTop - clientHeight > 100)
+    }
+
+    content.addEventListener("scroll", handleScroll)
+    return () => content.removeEventListener("scroll", handleScroll)
+  }, [])
+
   const addCustomer = useCallback(() => {
     const newCustomer = {
       id: `${Date.now()}`,
       name: `顾客${customers.length + 1}`,
       orders: {},
       served: {},
+      createdAt: Date.now(),
     }
     setCustomers((prevCustomers) => [...prevCustomers, newCustomer])
+    setExpandedCustomerId(newCustomer.id)
   }, [customers.length])
 
-  const removeCustomer = useCallback((id: string) => {
-    setCustomers((prevCustomers) => prevCustomers.filter((customer) => customer.id !== id))
+  const removeCustomer = useCallback(
+    (id: string) => {
+      setCustomers((prevCustomers) => prevCustomers.filter((customer) => customer.id !== id))
+      if (expandedCustomerId === id) {
+        setExpandedCustomerId(null)
+      }
+      setCustomerToDelete(null)
+    },
+    [expandedCustomerId],
+  )
+
+  const removeAllCustomers = useCallback(() => {
+    setCustomers([])
+    setExpandedCustomerId(null)
+    setIsDeleteAllDialogOpen(false)
   }, [])
 
   const updateOrder = useCallback((customerId: string, itemId: string, quantity: number) => {
@@ -98,7 +140,7 @@ export default function OrderPage() {
             ...customer,
             orders: {
               ...customer.orders,
-              [itemId]: Math.max(0, quantity), // Ensure quantity is not negative
+              [itemId]: Math.max(0, quantity),
             },
           }
         }
@@ -124,16 +166,14 @@ export default function OrderPage() {
     )
   }, [])
 
+  const toggleExpanded = useCallback((customerId: string) => {
+    setExpandedCustomerId((prevId) => (prevId === customerId ? null : customerId))
+  }, [])
+
   const calculateCustomerTotal = (customer: Customer) => {
     return Object.entries(customer.orders).reduce((total, [itemId, quantity]) => {
       const item = menuItems.find((item) => item.id === itemId)
       return total + (item ? item.price * quantity : 0)
-    }, 0)
-  }
-
-  const calculateGrandTotal = () => {
-    return customers.reduce((total, customer) => {
-      return total + calculateCustomerTotal(customer)
     }, 0)
   }
 
@@ -153,281 +193,186 @@ export default function OrderPage() {
     return "partial"
   }
 
-  return (
-    <div className="container mx-auto px-2 py-4">
-      <h1 className="text-2xl font-bold text-center mb-4">良辰大油边</h1>
+  const scrollToTop = () => {
+    contentRef.current?.scrollTo({ top: 0, behavior: "smooth" })
+  }
 
-      <Tabs defaultValue="orders" className="w-full">
-        <TabsList className="grid grid-cols-2 mb-4">
+  const scrollToBottom = () => {
+    contentRef.current?.scrollTo({ top: contentRef.current.scrollHeight, behavior: "smooth" })
+  }
+
+  const getPendingFoodItems = () => {
+    return menuItems
+      .filter((item) => item.category === "food")
+      .map((item) => {
+        const pendingCount = customers.reduce((count, customer) => {
+          if (customer.orders[item.id] && !customer.served[item.id]) {
+            return count + customer.orders[item.id]
+          }
+          return count
+        }, 0)
+
+        const earliestCustomer = customers
+          .filter((customer) => customer.orders[item.id] && !customer.served[item.id])
+          .sort((a, b) => a.createdAt - b.createdAt)[0]
+
+        return {
+          name: item.name,
+          pendingCount,
+          earliestCustomer: earliestCustomer ? earliestCustomer.name : "无",
+        }
+      })
+      .filter((item) => item.pendingCount > 0)
+  }
+
+  return (
+    <Tabs defaultValue="orders" className="flex flex-col h-screen">
+      <div className="flex items-center justify-between px-4 py-2 bg-white shadow-md sticky top-0 z-10">
+        <TabsList>
           <TabsTrigger value="orders">点菜表</TabsTrigger>
           <TabsTrigger value="summary">汇总</TabsTrigger>
         </TabsList>
+        <h1 className="text-xl font-bold">良辰大油边</h1>
+        <div className="flex items-center space-x-2">
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="icon">
+                <ClipboardList className="h-4 w-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>待上菜品列表</DialogTitle>
+                <DialogDescription>以下是当前所有未上的食物及其数量，以及最早点单的顾客</DialogDescription>
+              </DialogHeader>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>菜品</TableHead>
+                    <TableHead>待上数量</TableHead>
+                    <TableHead>最早顾客</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {getPendingFoodItems().map((item) => (
+                    <TableRow key={item.name}>
+                      <TableCell>{item.name}</TableCell>
+                      <TableCell>{item.pendingCount}</TableCell>
+                      <TableCell>{item.earliestCustomer}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </DialogContent>
+          </Dialog>
+          <Button onClick={addCustomer} size="icon" className="rounded-full">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
 
+      <div ref={contentRef} className="flex-grow overflow-y-auto px-2 py-4">
         <TabsContent value="orders" className="space-y-4">
-          <Card>
-            <CardHeader className="py-3">
-              <CardTitle className="text-lg mb-2">添加顾客</CardTitle>
-              <div className="flex flex-col space-y-2">
-                <Button onClick={addCustomer} className="w-full">
-                  <Plus className="h-4 w-4 mr-1" />
-                  添加新顾客
-                </Button>
-              </div>
-            </CardHeader>
-          </Card>
-
-          <Card>
-            <CardContent className="p-0">
-              <ScrollArea className="w-full whitespace-nowrap rounded-md border">
-                <div className="relative">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/50">
-                        <TableHead className="sticky left-0 z-20 bg-muted/50 font-medium">未上菜</TableHead>
-                        {foodItems.map((item) => (
-                          <TableHead key={item.id} className="text-center p-2 font-medium">
-                            {calculatePendingItems(customers, item.id)}
-                          </TableHead>
-                        ))}
-                        {drinkItems.map((item) => (
-                          <TableHead key={item.id} className="text-center p-2 font-medium">
-                            {calculatePendingItems(customers, item.id)}
-                          </TableHead>
-                        ))}
-                        <TableHead className="sticky right-0 z-20 bg-muted/50"></TableHead>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="sticky left-0 z-20 bg-background w-24">顾客</TableHead>
-
-                        {/* 食物标题 */}
-                        <TableHead colSpan={foodItems.length} className="text-center bg-muted/50">
-                          食物
-                        </TableHead>
-
-                        {/* 饮料标题 */}
-                        <TableHead colSpan={drinkItems.length} className="text-center bg-muted/50">
-                          饮料
-                        </TableHead>
-
-                        <TableHead className="sticky right-0 z-20 bg-background w-20 text-right">总计</TableHead>
-                      </TableRow>
-
-                      <TableRow>
-                        <TableHead className="sticky left-0 z-20 bg-background"></TableHead>
-
-                        {/* 食物列 */}
-                        {foodItems.map((item) => (
-                          <TableHead key={item.id} className="text-center p-2 min-w-24">
-                            <div className="font-medium text-xs">{item.name}</div>
-                            <div className="text-xs text-muted-foreground">{item.price}元</div>
-                          </TableHead>
-                        ))}
-
-                        {/* 饮料列 */}
-                        {drinkItems.map((item) => (
-                          <TableHead key={item.id} className="text-center p-2 min-w-24">
-                            <div className="font-medium text-xs">{item.name}</div>
-                            <div className="text-xs text-muted-foreground">{item.price}元</div>
-                          </TableHead>
-                        ))}
-
-                        <TableHead className="sticky right-0 z-20 bg-background"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-
-                    <TableBody>
-                      {customers.map((customer) => (
-                        <TableRow key={customer.id}>
-                          <TableCell className="sticky left-0 z-20 bg-background font-medium p-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center space-x-2">
-                                {(() => {
-                                  const status = getCustomerStatus(customer)
-                                  switch (status) {
-                                    case "all":
-                                      return <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                    case "partial":
-                                      return <Circle className="h-4 w-4 text-yellow-500" />
-                                    case "none":
-                                      return <CircleDashed className="h-4 w-4 text-gray-400" />
-                                  }
-                                })()}
-                                <span className="truncate max-w-16">{customer.name}</span>
-                              </div>
-                              <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <Trash2 className="h-3 w-3 text-destructive" />
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>确认删除</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                      您确定要删除 {customer.name} 吗？此操作无法撤销。
-                                    </AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>取消</AlertDialogCancel>
-                                    <AlertDialogAction
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        removeCustomer(customer.id)
-                                      }}
-                                    >
-                                      确认删除
-                                    </AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
-                            </div>
-                          </TableCell>
-
-                          {/* 食物数量输入 */}
-                          {foodItems.map((item) => (
-                            <TableCell key={item.id} className="p-1 text-center">
-                              <div className="flex flex-col items-center">
-                                <div className="flex items-center space-x-1 mb-1">
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    className="h-6 w-6"
-                                    onClick={() =>
-                                      updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) - 1)
-                                    }
-                                  >
-                                    <Minus className="h-3 w-3" />
-                                  </Button>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    value={customer.orders[item.id] || 0}
-                                    onChange={(e) =>
-                                      updateOrder(customer.id, item.id, Number.parseInt(e.target.value) || 0)
-                                    }
-                                    className="h-8 w-12 text-center border rounded"
-                                  />
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    className="h-6 w-6"
-                                    onClick={() =>
-                                      updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) + 1)
-                                    }
-                                  >
-                                    <Plus className="h-3 w-3" />
-                                  </Button>
-                                </div>
-                                {customer.orders[item.id] > 0 && (
-                                  <input
-                                    type="checkbox"
-                                    checked={customer.served[item.id] || false}
-                                    onChange={(e) => updateServedStatus(customer.id, item.id, e.target.checked)}
-                                    className="h-4 w-4"
-                                  />
-                                )}
-                              </div>
-                            </TableCell>
-                          ))}
-
-                          {/* 饮料数量输入 */}
-                          {drinkItems.map((item) => (
-                            <TableCell key={item.id} className="p-1 text-center">
-                              <div className="flex flex-col items-center">
-                                <div className="flex items-center space-x-1 mb-1">
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    className="h-6 w-6"
-                                    onClick={() =>
-                                      updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) - 1)
-                                    }
-                                  >
-                                    <Minus className="h-3 w-3" />
-                                  </Button>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    value={customer.orders[item.id] || 0}
-                                    onChange={(e) =>
-                                      updateOrder(customer.id, item.id, Number.parseInt(e.target.value) || 0)
-                                    }
-                                    className="h-8 w-12 text-center border rounded"
-                                  />
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    className="h-6 w-6"
-                                    onClick={() =>
-                                      updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) + 1)
-                                    }
-                                  >
-                                    <Plus className="h-3 w-3" />
-                                  </Button>
-                                </div>
-                                {customer.orders[item.id] > 0 && (
-                                  <input
-                                    type="checkbox"
-                                    checked={customer.served[item.id] || false}
-                                    onChange={(e) => updateServedStatus(customer.id, item.id, e.target.checked)}
-                                    className="h-4 w-4"
-                                  />
-                                )}
-                              </div>
-                            </TableCell>
-                          ))}
-
-                          <TableCell className="sticky right-0 z-20 bg-background font-medium text-right p-2">
-                            {calculateCustomerTotal(customer)}元
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-
-                    <TableFooter>
-                      <TableRow>
-                        <TableCell className="sticky left-0 z-20 bg-muted font-medium">总数量</TableCell>
-
-                        {/* 食物总数量 */}
-                        {foodItems.map((item) => (
-                          <TableCell key={item.id} className="text-center font-medium">
-                            {calculateItemTotal(item.id)}
-                          </TableCell>
-                        ))}
-
-                        {/* 饮料总数量 */}
-                        {drinkItems.map((item) => (
-                          <TableCell key={item.id} className="text-center font-medium">
-                            {calculateItemTotal(item.id)}
-                          </TableCell>
-                        ))}
-
-                        <TableCell className="sticky right-0 z-20 bg-muted font-medium text-right">
-                          {calculateGrandTotal()}元
-                        </TableCell>
-                      </TableRow>
-                    </TableFooter>
-                  </Table>
+          {customers.map((customer) => (
+            <Card key={customer.id} className="mb-4">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center space-x-2">
+                    {(() => {
+                      const status = getCustomerStatus(customer)
+                      switch (status) {
+                        case "all":
+                          return <CheckCircle2 className="h-5 w-5 text-green-500" />
+                        case "partial":
+                          return <Circle className="h-5 w-5 text-yellow-500" />
+                        case "none":
+                          return <CircleDashed className="h-5 w-5 text-gray-400" />
+                      }
+                    })()}
+                    <span className="font-medium text-lg">{customer.name}</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Button variant="ghost" size="sm" onClick={() => toggleExpanded(customer.id)}>
+                      {expandedCustomerId === customer.id ? <ChevronUp /> : <ChevronDown />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                      onClick={() => setCustomerToDelete(customer.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
-            </CardContent>
-          </Card>
+                {expandedCustomerId === customer.id ? (
+                  <div className="space-y-2">
+                    {menuItems.map((item) => (
+                      <div key={item.id} className="flex items-center justify-between">
+                        <div>
+                          <span className="font-medium">{item.name}</span>
+                          <span className="text-sm text-muted-foreground ml-2">{item.price}元</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          {customer.orders[item.id] > 0 && (
+                            <input
+                              type="checkbox"
+                              checked={customer.served[item.id] || false}
+                              onChange={(e) => updateServedStatus(customer.id, item.id, e.target.checked)}
+                              className="h-5 w-5 ml-2"
+                            />
+                          )}
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8"
+                            onClick={() => updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) - 1)}
+                          >
+                            <Minus className="h-4 w-4" />
+                          </Button>
+                          <input
+                            type="number"
+                            min="0"
+                            value={customer.orders[item.id] || 0}
+                            onChange={(e) => updateOrder(customer.id, item.id, Number.parseInt(e.target.value) || 0)}
+                            className="h-8 w-16 text-center border rounded"
+                          />
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8"
+                            onClick={() => updateOrder(customer.id, item.id, (customer.orders[item.id] || 0) + 1)}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {menuItems
+                      .filter((item) => customer.orders[item.id] > 0)
+                      .map((item) => (
+                        <span key={item.id} className="text-sm">
+                          {item.name}
+                          {customer.orders[item.id]} {customer.served[item.id] ? "已上" : "未上"} |
+                        </span>
+                      ))}
+                  </div>
+                )}
+                <div className="mt-2 text-right font-medium">总计: {calculateCustomerTotal(customer)}元</div>
+              </CardContent>
+            </Card>
+          ))}
+          <div className="h-32"></div> {/* 添加底部空白 */}
         </TabsContent>
         <TabsContent value="summary">
-          <Card>
-            <CardHeader>
-              <CardTitle>订单汇总</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
+          <Card className="mt-4">
+            <CardContent className="pt-6">
+              <div className="space-y-6">
                 <div>
-                  <h3 className="font-medium mb-2">食物</h3>
+                  <h3 className="font-medium mb-2 text-lg">食物</h3>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -438,24 +383,37 @@ export default function OrderPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {foodItems.map((item) => {
-                        const quantity = calculateItemTotal(item.id)
-                        if (quantity === 0) return null
-                        return (
-                          <TableRow key={item.id}>
-                            <TableCell>{item.name}</TableCell>
-                            <TableCell>{item.price}元</TableCell>
-                            <TableCell>{quantity}</TableCell>
-                            <TableCell className="text-right">{quantity * item.price}元</TableCell>
-                          </TableRow>
-                        )
-                      })}
+                      {menuItems
+                        .filter((item) => item.category === "food")
+                        .map((item) => {
+                          const quantity = calculateItemTotal(item.id)
+                          if (quantity === 0) return null
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell>{item.name}</TableCell>
+                              <TableCell>{item.price}元</TableCell>
+                              <TableCell>{quantity}</TableCell>
+                              <TableCell className="text-right">{quantity * item.price}元</TableCell>
+                            </TableRow>
+                          )
+                        })}
                     </TableBody>
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={3}>食物总收入</TableCell>
+                        <TableCell className="text-right">
+                          {menuItems
+                            .filter((item) => item.category === "food")
+                            .reduce((total, item) => total + calculateItemTotal(item.id) * item.price, 0)}
+                          元
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
                   </Table>
                 </div>
 
                 <div>
-                  <h3 className="font-medium mb-2">饮料</h3>
+                  <h3 className="font-medium mb-2 text-lg">饮料</h3>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -466,34 +424,102 @@ export default function OrderPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {drinkItems.map((item) => {
-                        const quantity = calculateItemTotal(item.id)
-                        if (quantity === 0) return null
-                        return (
-                          <TableRow key={item.id}>
-                            <TableCell>{item.name}</TableCell>
-                            <TableCell>{item.price}元</TableCell>
-                            <TableCell>{quantity}</TableCell>
-                            <TableCell className="text-right">{quantity * item.price}元</TableCell>
-                          </TableRow>
-                        )
-                      })}
+                      {menuItems
+                        .filter((item) => item.category === "drink")
+                        .map((item) => {
+                          const quantity = calculateItemTotal(item.id)
+                          if (quantity === 0) return null
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell>{item.name}</TableCell>
+                              <TableCell>{item.price}元</TableCell>
+                              <TableCell>{quantity}</TableCell>
+                              <TableCell className="text-right">{quantity * item.price}元</TableCell>
+                            </TableRow>
+                          )
+                        })}
+                    </TableBody>
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={3}>饮料总收入</TableCell>
+                        <TableCell className="text-right">
+                          {menuItems
+                            .filter((item) => item.category === "drink")
+                            .reduce((total, item) => total + calculateItemTotal(item.id) * item.price, 0)}
+                          元
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  </Table>
+                </div>
+
+                <div>
+                  <Table>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell colSpan={3} className="font-medium text-lg">
+                          总收入
+                        </TableCell>
+                        <TableCell className="text-right font-medium text-lg">
+                          {menuItems.reduce((total, item) => total + calculateItemTotal(item.id) * item.price, 0)}元
+                        </TableCell>
+                      </TableRow>
                     </TableBody>
                   </Table>
                 </div>
 
-                <div className="pt-4 border-t">
-                  <div className="flex justify-between text-lg font-bold">
-                    <span>总计</span>
-                    <span>{calculateGrandTotal()}元</span>
-                  </div>
+                <div className="mt-8">
+                  <Button variant="destructive" onClick={() => setIsDeleteAllDialogOpen(true)} className="w-full">
+                    删除所有顾客
+                  </Button>
                 </div>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs>
-    </div>
+      </div>
+
+      {/* 删除单个顾客的确认对话框 */}
+      <AlertDialog open={customerToDelete !== null} onOpenChange={() => setCustomerToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>您确定要删除这个顾客吗？此操作无法撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setCustomerToDelete(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => customerToDelete && removeCustomer(customerToDelete)}>
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 删除所有顾客的确认对话框 */}
+      <AlertDialog open={isDeleteAllDialogOpen} onOpenChange={setIsDeleteAllDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除所有顾客</AlertDialogTitle>
+            <AlertDialogDescription>您确定要删除所有顾客吗？此操作无法撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setIsDeleteAllDialogOpen(false)}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={removeAllCustomers}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {showScrollToTop && (
+        <Button className="fixed bottom-20 right-4 rounded-full" size="icon" onClick={scrollToTop}>
+          <ChevronsUp className="h-4 w-4" />
+        </Button>
+      )}
+      {showScrollToBottom && (
+        <Button className="fixed bottom-4 right-4 rounded-full" size="icon" onClick={scrollToBottom}>
+          <ChevronsDown className="h-4 w-4" />
+        </Button>
+      )}
+    </Tabs>
   )
 }
 

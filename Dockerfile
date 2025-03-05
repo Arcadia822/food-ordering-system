@@ -1,5 +1,5 @@
 # Build stage
-FROM node:18-alpine AS builder
+FROM node:18-alpine
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm install --force
 
 # Copy project files
 COPY . .
@@ -15,19 +15,8 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Production stage
-FROM node:18-alpine AS runner
-
-WORKDIR /app
-
-# Copy necessary files from builder
-COPY --from=builder /app/next.config.mjs ./
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-
 # Expose the port the app runs on
 EXPOSE 3000
 
 # Start the application
-CMD ["node", "server.js"]
+CMD ["npm", "run", "start"]
